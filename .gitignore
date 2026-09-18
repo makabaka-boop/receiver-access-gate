@@ -1,0 +1,7 @@
+# binaries
+/accessgate
+/verify
+*.out
+
+# local env
+.env

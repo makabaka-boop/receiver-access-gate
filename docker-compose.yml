@@ -1,0 +1,73 @@
+# Access gate deployment: PostgreSQL + two API processes sharing one gate.
+#
+# Published host ports are overridable, e.g.:
+#   PORT_API1=18081 PORT_API2=18082 docker compose up -d
+#
+# One-shot acceptance (exits 0 on success):
+#   docker compose build && docker compose run --rm verify
+
+name: access-gate
+
+x-api: &api
+  build:
+    context: .
+    target: api
+  image: access-gate-api:local
+  environment:
+    DATABASE_URL: postgres://gate:gate@postgres:5432/gate?sslmode=disable&pool_max_conns=20
+    LISTEN_ADDR: ":8080"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gate
+      POSTGRES_PASSWORD: gate
+      POSTGRES_DB: gate
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Override with PORT_POSTGRES if 5432 is taken on the host.
+      - "${PORT_POSTGRES:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gate -d gate"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api1:
+    <<: *api
+    ports:
+      - "${PORT_API1:-8081}:8080"
+
+  api2:
+    <<: *api
+    ports:
+      - "${PORT_API2:-8082}:8080"
+
+  # One-shot acceptance suite: talks to BOTH real API containers and exits.
+  # Every run uses unique receiver names, so it is safe to re-run against the
+  # same persistent database volume.
+  verify:
+    build:
+      context: .
+      target: verify
+    image: access-gate-verify:local
+    environment:
+      API1_URL: http://api1:8080
+      API2_URL: http://api2:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api1:
+        condition: service_started
+      api2:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  pgdata:
